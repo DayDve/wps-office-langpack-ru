@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+# Удаление символьной ссылки шрифтов
+rm -f /etc/fonts/conf.d/99-wps-office-ru.conf
+
+# Обновление кэша шрифтов
+fc-cache -f || true
+
+# Откат глобального UILanguage в setup.cfg
+SETUP_CFG="/opt/kingsoft/wps-office/office6/cfgs/setup.cfg"
+if [ -f "$SETUP_CFG" ]; then
+    sed -i 's/^UILanguage=.*/UILanguage=2052/' "$SETUP_CFG" || true
+    sed -i 's/^DefaultLanguage=.*/DefaultLanguage=2052/' "$SETUP_CFG" || true
+fi
+
+exit 0

@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+# Символьная ссылка на правила шрифтов
+ln -sf /etc/fonts/conf.avail/99-wps-office-ru.conf /etc/fonts/conf.d/99-wps-office-ru.conf
+
+# Обновление кэша шрифтов
+fc-cache -f || true
+
+# Установка русского языка (1049) в глобальном setup.cfg
+SETUP_CFG="/opt/kingsoft/wps-office/office6/cfgs/setup.cfg"
+if [ -f "$SETUP_CFG" ]; then
+    sed -i 's/^UILanguage=.*/UILanguage=1049/' "$SETUP_CFG" || true
+    sed -i 's/^DefaultLanguage=.*/DefaultLanguage=1049/' "$SETUP_CFG" || true
+fi
+
+exit 0

@@ -1,0 +1,71 @@
+name: Check for New WPS Office Language Pack
+
+on:
+  schedule:
+    # Запуск каждый день в 04:00 UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full wget
+
+      - name: Run version check and changelog generator
+        id: check_step
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 .github/scripts/check_version.py 2>&1 | tee build_run.log
+
+      - name: Commit and push changes
+        if: steps.check_step.outputs.updated == 'true'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add version.txt CHANGELOG.md
+          git commit -m "chore: release version ${{ steps.check_step.outputs.version }}"
+          git push
+
+      - name: Send Telegram notification on failure
+        if: failure() && env.TG_TOKEN != '' && env.TG_CHAT_ID != ''
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          # Сжимаем лог работы в gzip
+          gzip -c build_run.log > run_log.log.gz || true
+
+          MSG="⚠️ *Ошибка в воркфлоу wps-office-langpack-ru*
+
+          *Репозиторий:* \`${GITHUB_REPOSITORY}\`
+          *Событие:* \`${GITHUB_EVENT_NAME}\`
+          *Ссылка на логи:* https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          if [ -f "run_log.log.gz" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendDocument" \
+              -F "chat_id=${TG_CHAT_ID}" \
+              -F "document=@run_log.log.gz" \
+              -F "parse_mode=Markdown" \
+              -F "caption=${MSG}"
+          else
+            curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+              -d "chat_id=${TG_CHAT_ID}" \
+              -d "parse_mode=Markdown" \
+              -d "text=${MSG}"
+          fi
