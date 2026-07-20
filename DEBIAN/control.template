@@ -1,8 +1,9 @@
 Package: wps-office-langpack-ru
 Version: __VERSION__
 Architecture: all
-Maintainer: Daydve <daydve@localhost>
+Maintainer: DayDve <daydve@smbit.pro>
 Depends: wps-office (>= 12)
+Replaces: wps-office
 Section: localization
 Priority: optional
 Description: Russian language pack, plugins and font metric fixes for WPS Office 12
