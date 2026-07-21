@@ -1,17 +1,69 @@
 #!/bin/sh
 set -e
 
-# Символьная ссылка на правила шрифтов
+# 1. Символьная ссылка на правила шрифтов
 ln -sf /etc/fonts/conf.avail/99-wps-office-ru.conf /etc/fonts/conf.d/99-wps-office-ru.conf
-
-# Обновление кэша шрифтов
 fc-cache -f || true
 
-# Установка русского языка (1049) в глобальном setup.cfg
-SETUP_CFG="/opt/kingsoft/wps-office/office6/cfgs/setup.cfg"
-if [ -f "$SETUP_CFG" ]; then
-    sed -i 's/^UILanguage=.*/UILanguage=1049/' "$SETUP_CFG" || true
-    sed -i 's/^DefaultLanguage=.*/DefaultLanguage=1049/' "$SETUP_CFG" || true
-fi
+# 2. Безопасная работа с пользовательскими Office.conf через стандартный модуль Python configparser
+set_user_office_conf() {
+    local conf_file="$1"
+    local owner_user="$2"
+
+    [ -z "$conf_file" ] && return 0
+    local conf_dir
+    conf_dir=$(dirname "$conf_file")
+
+    mkdir -p "$conf_dir"
+    if [ -n "$owner_user" ]; then
+        chown -R "$owner_user" "$conf_dir" 2>/dev/null || true
+    fi
+
+    python3 -c '
+import sys, os, configparser
+
+conf_file = sys.argv[1]
+
+config = configparser.ConfigParser(interpolation=None, strict=False)
+config.optionxform = str
+
+if os.path.exists(conf_file):
+    try:
+        config.read(conf_file, encoding="utf-8")
+    except Exception:
+        pass
+
+if "General" not in config:
+    config["General"] = {}
+config["General"]["languages"] = "ru_RU"
+
+if "6.0" not in config:
+    config["6.0"] = {}
+config["6.0"]["languages"] = "ru_RU"
+config["6.0"][r"common\DefaultLanguage"] = "1049"
+config["6.0"][r"common\Local\UILanguage"] = "1049"
+
+with open(conf_file, "w", encoding="utf-8") as f:
+    config.write(f, space_around_delimiters=False)
+' "$conf_file" 2>/dev/null || true
+
+    if [ -n "$owner_user" ] && [ -f "$conf_file" ]; then
+        chown "$owner_user" "$conf_file" 2>/dev/null || true
+    fi
+}
+
+# Применяем к /etc/skel для будущих пользователей
+set_user_office_conf "/etc/skel/.config/Kingsoft/Office.conf" ""
+
+# Применяем ко всем текущим пользователям /home/*
+for user_dir in /home/*; do
+    if [ -d "$user_dir" ]; then
+        u_name=$(basename "$user_dir")
+        set_user_office_conf "$user_dir/.config/Kingsoft/Office.conf" "$u_name"
+    fi
+done
+
+# Применяем к root
+set_user_office_conf "/root/.config/Kingsoft/Office.conf" "root"
 
 exit 0

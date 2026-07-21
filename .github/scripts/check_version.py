@@ -14,6 +14,7 @@ import datetime
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
 VERSION_FILE = os.path.join(REPO_ROOT, "version.txt")
+REVISION_FILE = os.path.join(REPO_ROOT, "revision.txt")
 CHANGELOG_FILE = os.path.join(REPO_ROOT, "CHANGELOG.md")
 
 BASE_URL = "https://global-static.wpscdn.com/office/commons/static/kplugin/global/plugin/wps_intl/addons/pool/win-x64/klangruru_3.1.0.{}.7z"
@@ -70,7 +71,12 @@ def main():
     with open(VERSION_FILE, "r", encoding="utf-8") as f:
         current_build = f.read().strip()
 
-    print(f"Current version in version.txt: {current_build}")
+    current_rev = "1"
+    if os.path.exists(REVISION_FILE):
+        with open(REVISION_FILE, "r", encoding="utf-8") as f:
+            current_rev = f.read().strip() or "1"
+
+    print(f"Current version in version.txt: {current_build}, revision: {current_rev}")
 
     target_build_arg = sys.argv[1] if len(sys.argv) > 1 else None
 
@@ -104,12 +110,31 @@ def main():
                     high = mid - 1
         latest_build = str(latest_build)
 
-    if latest_build == current_build:
-        print(f"No new version found. Current version {current_build} is latest.")
+    # Проверяем, менялись ли любые файлы пакета в Git (кроме служебных мета-файлов)
+    IGNORE_META = {"version.txt", "revision.txt", "CHANGELOG.md"}
+    pkg_files_changed = False
+    try:
+        res = subprocess.run(["git", "diff", "HEAD~1", "HEAD", "--name-only"], capture_output=True, text=True)
+        mod_files = res.stdout.splitlines()
+        for mf in mod_files:
+            if mf not in IGNORE_META and not mf.startswith("dist/"):
+                pkg_files_changed = True
+                print(f"Detected modification in package file: {mf}")
+                break
+    except Exception as e:
+        sys.stderr.write(f"Git diff check error: {e}\n")
+
+    if latest_build == current_build and not pkg_files_changed:
+        print(f"No changes found. Current version {current_build}-{current_rev} is latest.")
         set_github_output("updated", "false")
         sys.exit(0)
 
-    print(f"NEW VERSION FOUND: {latest_build} (was {current_build})")
+    if latest_build != current_build:
+        next_rev = "1"
+        print(f"NEW UPSTREAM VERSION FOUND: {latest_build} (was {current_build}). Resetting revision to 1.")
+    else:
+        next_rev = str(int(current_rev) + 1)
+        print(f"Packaging files updated for build {latest_build}. Bumping package revision to {next_rev}.")
 
     old_url = BASE_URL.format(current_build)
     new_url = BASE_URL.format(latest_build)
@@ -156,7 +181,7 @@ def main():
         else:
             build_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
-        deb_version = f"12.3.1.0.{latest_build}"
+        deb_version = f"12.3.1.0.{latest_build}-{next_rev}"
 
         old_files = {os.path.relpath(p, old_extracted) for p in glob.glob(old_extracted + "/**", recursive=True) if os.path.isfile(p)}
         new_files = {os.path.relpath(p, new_extracted) for p in glob.glob(new_extracted + "/**", recursive=True) if os.path.isfile(p)}
@@ -181,21 +206,52 @@ def main():
 
         raw_diff_text = ". ".join(raw_summary_parts)
 
+        is_new_upstream = (latest_build != current_build)
+        is_revision_bump = (latest_build == current_build and pkg_files_changed)
+
         raw_key = os.environ.get("GEMINI_API_KEY", "")
         api_key = raw_key.replace('"', '').replace("'", "").strip()
 
         ai_generated = False
         new_entry_content = ""
 
-        if api_key and raw_diff_text.strip():
-            prompt = f"""Ты — технический редактор языковых пакетов Linux. Сформируй краткий и точный Changelog на русском языке для релиза языкового пакета WPS Office {deb_version} (ревизия {latest_build}, была {current_build}).
+        if api_key:
+            if is_revision_bump:
+                prompt = f"""Ты — технический редактор языкового пакета Linux wps-office-langpack-ru. Сформируй краткий и полезный Changelog на русском языке для релиза версии {deb_version}.
+
+В этом релизе обновлена **ревизия системного пакета** (автоматика интеграции, шрифты, настройки профиля), а билд самого перевода остается {latest_build}.
+
+ТРЕБОВАНИЯ:
+- Пиши только полезные факты ДЛЯ КОНЕЧНОГО ПОЛЬЗОВАТЕЛЯ (например, улучшена автоматическая пропись русского языка при установке, оптимизированы правила подстановки системных шрифтов, улучшена деинсталляция).
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать технические слова разработчиков ("build.sh", "postinst", "git diff", "dpkg", "скрипт сборки"). Пользователю они не нужны.
+- НЕ ПИШИ воду и хвалебные слова.
+- Длина: 2-3 коротких и понятных пункта.
+
+Формат каждого пункта: * **Компонент**: Сухое и понятное описание пользы.
+Выведи ТОЛЬКО маркированный список изменений в формате Markdown."""
+            elif is_new_upstream and pkg_files_changed:
+                prompt = f"""Ты — технический редактор языкового пакета Linux wps-office-langpack-ru. Сформируй краткий и полезный Changelog на русском языке для релиза версии {deb_version} (новый билд перевода {latest_build}, был {current_build}).
+
+В этом релизе вышли НОВЫЙ перевод от разработчиков Kingsoft и обновления системного пакета!
+
+ТРЕБОВАНИЯ:
+- Опиши кратко обновления перевода интерфейса/шаблонов и полезные улучшения системного пакета для пользователя (автоматическая пропись русского языка, подстановка шрифтов, деинсталляция).
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать технические слова разработчиков ("build.sh", "postinst", "git diff", "dpkg", "скрипт сборки"). Пользователю они не нужны.
+- НЕ ПИШИ воду и хвалебные слова.
+
+ДАННЫЕ ПО ПЕРЕВОДУ:
+{raw_diff_text}
+
+Формат каждого пункта: * **Компонент**: Сухое и понятное описание.
+Выведи ТОЛЬКО маркированный список изменений в формате Markdown."""
+            else:
+                prompt = f"""Ты — технический редактор языковых пакетов Linux. Сформируй краткий и точный Changelog на русском языке для релиза языкового пакета WPS Office {deb_version} (билд {latest_build}, был {current_build}).
 
 ВАЖНОЕ ПРАВИЛО: ЭТО ЯЗЫКОВОЙ ПАКЕТ (LANGPACK). Здесь НЕТ программного или исполняемого кода C++! Пиши ТОЛЬКО про **перевод интерфейса, подсказки меню и локализованные шаблоны**.
 
 КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО:
 - Писать "обновлен программный код", "библиотеки", "исполняемый модуль".
 - Писать воду и хвалебные слова ("комфортный", "интуитивный", "всестороннее").
-- Писать про добавление 0 файлов.
 
 ТРЕБОВАНИЯ:
 - Пиши только короткие факты про обновление перевода и шаблонов (3-4 пункта).
@@ -235,12 +291,15 @@ def main():
 
         if not ai_generated:
             lines = []
-            if human_changed_list:
-                lines.append("- **Обновлен перевод интерфейса и меню**:")
-                for app in human_changed_list:
-                    lines.append(f"  - {app}")
-            if len(added) > 0:
-                lines.append(f"- **Добавлено новых русскоязычных шаблонов**: {len(added)} файлов")
+            if is_revision_bump:
+                lines.append("* **Интеграция и автоматизация**: Улучшена автоматическая настройка русского языка при установке пакета и очистка при удалении.")
+            else:
+                if human_changed_list:
+                    lines.append("- **Обновлен перевод интерфейса и меню**:")
+                    for app in human_changed_list:
+                        lines.append(f"  - {app}")
+                if len(added) > 0:
+                    lines.append(f"- **Добавлено новых русскоязычных шаблонов**: {len(added)} файлов")
             new_entry_content = "\n".join(lines)
 
         new_entry_content = re.sub(r'^\s*#+\s+[^\n]*\n*', '', new_entry_content).strip()
@@ -265,6 +324,9 @@ def main():
 
         with open(VERSION_FILE, "w", encoding="utf-8") as f:
             f.write(f"{latest_build}\n")
+
+        with open(REVISION_FILE, "w", encoding="utf-8") as f:
+            f.write(f"{next_rev}\n")
 
         print(f"Version bumped to {latest_build}, CHANGELOG.md updated.")
         set_github_output("updated", "true")

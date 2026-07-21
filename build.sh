@@ -3,6 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION_FILE="$SCRIPT_DIR/version.txt"
+REVISION_FILE="$SCRIPT_DIR/revision.txt"
 
 if [ -n "$1" ]; then
     BUILD_NUM="$1"
@@ -13,12 +14,21 @@ else
     exit 1
 fi
 
+if [ -n "$2" ]; then
+    PKG_REV="$2"
+elif [ -f "$REVISION_FILE" ]; then
+    PKG_REV="$(tr -d '[:space:]' < "$REVISION_FILE")"
+else
+    PKG_REV="1"
+fi
+
 LANGPACK_URL="https://global-static.wpscdn.com/office/commons/static/kplugin/global/plugin/wps_intl/addons/pool/win-x64/klangruru_3.1.0.${BUILD_NUM}.7z"
 RAW_VER="3.1.0.${BUILD_NUM}"
-DEB_VERSION="12.${RAW_VER}"
+DEB_VERSION="12.${RAW_VER}-${PKG_REV}"
 
 echo "=== Сборка пакета wps-office-langpack-ru ==="
 echo "Билд языкового пакета: $BUILD_NUM"
+echo "Ревизия сборки пакета: $PKG_REV"
 echo "Версия DEB-пакета: $DEB_VERSION"
 echo "URL: $LANGPACK_URL"
 
@@ -55,6 +65,11 @@ mkdir -p "$PKG_DIR/opt/kingsoft/wps-office/office6/addons"
 
 if [ -d "$EXTRACT_DIR/ru_RU" ]; then
     cp -a "$EXTRACT_DIR/ru_RU" "$PKG_DIR/opt/kingsoft/wps-office/office6/mui/"
+    
+    # Обязательный ресурс интерфейса Prometheus (Fusion UI), отсутствующий в zip klangruru
+    if [ -f "/opt/kingsoft/wps-office/office6/mui/en_US/prometheus_kso_res.rcc" ]; then
+        cp "/opt/kingsoft/wps-office/office6/mui/en_US/prometheus_kso_res.rcc" "$PKG_DIR/opt/kingsoft/wps-office/office6/mui/ru_RU/"
+    fi
 fi
 
 if [ -d "$EXTRACT_DIR/addons" ]; then
@@ -66,6 +81,6 @@ chmod 755 "$PKG_DIR/DEBIAN/postinst" "$PKG_DIR/DEBIAN/postrm"
 DEB_FILE="$DIST_DIR/wps-office-langpack-ru_${DEB_VERSION}_all.deb"
 
 echo "=== 4. Сборка DEB-пакета ==="
-dpkg-deb --build "$PKG_DIR" "$DEB_FILE"
+dpkg-deb --root-owner-group --build "$PKG_DIR" "$DEB_FILE"
 
 echo "=== ГОТОВО! Пакет собран: $DEB_FILE ==="

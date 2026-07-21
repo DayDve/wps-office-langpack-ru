@@ -1,17 +1,43 @@
 #!/bin/sh
 set -e
 
-# Удаление символьной ссылки шрифтов
-rm -f /etc/fonts/conf.d/99-wps-office-ru.conf
+case "$1" in
+    remove|purge)
+        # 1. Удаление символьной ссылки шрифтов
+        rm -f /etc/fonts/conf.d/99-wps-office-ru.conf
+        fc-cache -f || true
 
-# Обновление кэша шрифтов
-fc-cache -f || true
+        # 2. Зачистка изменений в /etc/skel/.config/Kingsoft/Office.conf
+        SKEL_CONF="/etc/skel/.config/Kingsoft/Office.conf"
+        if [ -f "$SKEL_CONF" ]; then
+            sed -i '/^languages=ru_RU/d' "$SKEL_CONF" 2>/dev/null || true
+            sed -i '/^common\\DefaultLanguage=1049/d' "$SKEL_CONF" 2>/dev/null || true
+            sed -i '/^common\\Local\\UILanguage=1049/d' "$SKEL_CONF" 2>/dev/null || true
 
-# Откат глобального UILanguage в setup.cfg
-SETUP_CFG="/opt/kingsoft/wps-office/office6/cfgs/setup.cfg"
-if [ -f "$SETUP_CFG" ]; then
-    sed -i 's/^UILanguage=.*/UILanguage=2052/' "$SETUP_CFG" || true
-    sed -i 's/^DefaultLanguage=.*/DefaultLanguage=2052/' "$SETUP_CFG" || true
-fi
+            # Если файл остался пустым или содержит только заголовок секции, удаляем его
+            CLEAN_VAL=$(tr -d '[:space:]' < "$SKEL_CONF")
+            if [ "$CLEAN_VAL" = "[6.0]" ] || [ "$CLEAN_VAL" = "[General]" ] || [ "$CLEAN_VAL" = "[General][6.0]" ] || [ -z "$CLEAN_VAL" ]; then
+                rm -f "$SKEL_CONF"
+                rmdir /etc/skel/.config/Kingsoft 2>/dev/null || true
+            fi
+        fi
+
+        # 3. Принудительное удаление всех каталогов ru_RU и ru-ru в mui и addons
+        rm -rf /opt/kingsoft/wps-office/office6/mui/ru_RU 2>/dev/null || true
+
+        if [ -d "/opt/kingsoft/wps-office/office6/addons" ]; then
+            find /opt/kingsoft/wps-office/office6/addons -name "ru_RU" -exec rm -rf {} + 2>/dev/null || true
+            find /opt/kingsoft/wps-office/office6/addons -name "ru-ru" -exec rm -rf {} + 2>/dev/null || true
+            # Очистка всех пустых родительских каталогов снизу вверх (-depth)
+            find /opt/kingsoft/wps-office/office6/addons -depth -type d -empty -delete 2>/dev/null || true
+        fi
+        ;;
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
 
 exit 0
