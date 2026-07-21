@@ -76,6 +76,12 @@ if [ -d "$EXTRACT_DIR/addons" ]; then
     cp -a "$EXTRACT_DIR/addons/." "$PKG_DIR/opt/kingsoft/wps-office/office6/addons/"
 fi
 
+# Копируем системные русифицированные шаблоны
+if [ -d "$SCRIPT_DIR/templates" ]; then
+    mkdir -p "$PKG_DIR/opt/kingsoft/wps-office/templates"
+    cp -a "$SCRIPT_DIR/templates/." "$PKG_DIR/opt/kingsoft/wps-office/templates/"
+fi
+
 chmod 755 "$PKG_DIR/DEBIAN/postinst" "$PKG_DIR/DEBIAN/postrm"
 
 DEB_FILE="$DIST_DIR/wps-office-langpack-ru_${DEB_VERSION}_all.deb"

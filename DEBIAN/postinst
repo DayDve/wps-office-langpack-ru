@@ -5,7 +5,7 @@ set -e
 ln -sf /etc/fonts/conf.avail/99-wps-office-ru.conf /etc/fonts/conf.d/99-wps-office-ru.conf
 fc-cache -f || true
 
-# 2. Безопасная работа с пользовательскими Office.conf через стандартный модуль Python configparser
+# 2. Безопасная функция прописи конфигурации, русификации .desktop ярлыков и шаблонов через Python
 set_user_office_conf() {
     local conf_file="$1"
     local owner_user="$2"
@@ -52,18 +52,150 @@ with open(conf_file, "w", encoding="utf-8") as f:
     fi
 }
 
-# Применяем к /etc/skel для будущих пользователей
-set_user_office_conf "/etc/skel/.config/Kingsoft/Office.conf" ""
+# Удаляем китайские файлы шаблонов из системного каталога
+rm -f "/opt/kingsoft/wps-office/templates/WPS文字文档.wps" 2>/dev/null || true
+rm -f "/opt/kingsoft/wps-office/templates/WPS演示文稿.dps" 2>/dev/null || true
+rm -f "/opt/kingsoft/wps-office/templates/WPS表格工作表.et" 2>/dev/null || true
 
-# Применяем ко всем текущим пользователям /home/*
+# Python-скрипт обработки .desktop файлов и копирования шаблонов
+python3 -c '
+import sys, os, shutil
+
+def localize_desktop_dir(desktop_dir):
+    if not os.path.exists(desktop_dir):
+        return
+
+    translations = {
+        "wps-office-wps.desktop": {
+            "Name[ru_RU]": "WPS Текст",
+            "GenericName[ru_RU]": "WPS Текст",
+            "Comment[ru_RU]": "Редактирование текстов и документов WPS Writer"
+        },
+        "wps-office-et.desktop": {
+            "Name[ru_RU]": "WPS Таблицы",
+            "GenericName[ru_RU]": "WPS Таблицы",
+            "Comment[ru_RU]": "Анализ и управление данными WPS Spreadsheets"
+        },
+        "wps-office-wpp.desktop": {
+            "Name[ru_RU]": "WPS Презентации",
+            "GenericName[ru_RU]": "WPS Презентации",
+            "Comment[ru_RU]": "Создание и показ презентаций WPS Presentation"
+        },
+        "wps-office-pdf.desktop": {
+            "Name[ru_RU]": "WPS PDF",
+            "GenericName[ru_RU]": "WPS PDF",
+            "Comment[ru_RU]": "Просмотр и редактирование файлов PDF"
+        },
+        "wps-office-prometheus.desktop": {
+            "Name[ru_RU]": "WPS Office",
+            "GenericName[ru_RU]": "WPS Office",
+            "Comment[ru_RU]": "Офисный пакет WPS Office"
+        }
+    }
+
+    for fname, keys in translations.items():
+        fpath = os.path.join(desktop_dir, fname)
+        if not os.path.exists(fpath):
+            continue
+
+        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        sec_idx = -1
+        for i, line in enumerate(lines):
+            if line.strip() == "[Desktop Entry]":
+                sec_idx = i
+                break
+
+        if sec_idx == -1:
+            continue
+
+        for k, v in keys.items():
+            target_line = f"{k}={v}\n"
+            found = False
+            for j in range(sec_idx + 1, len(lines)):
+                if lines[j].startswith("[") and lines[j].strip().endswith("]"):
+                    break
+                if lines[j].startswith(f"{k}="):
+                    lines[j] = target_line
+                    found = True
+                    break
+            if not found:
+                lines.insert(sec_idx + 1, target_line)
+
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+def setup_templates_and_desktops_for_user(user_home, user_name):
+    if not os.path.exists(user_home):
+        return
+
+    # Локализация .desktop файлов пользователя
+    app_dir = os.path.join(user_home, ".local", "share", "applications")
+    localize_desktop_dir(app_dir)
+
+    # Обработка шаблонов пользователя
+    tpl_dirs = [
+        os.path.join(user_home, "Templates"),
+        os.path.join(user_home, "Шаблоны")
+    ]
+
+    chinese_templates = ["WPS文字文档.wps", "WPS演示文稿.dps", "WPS表格工作表.et"]
+    system_tpl_dir = "/opt/kingsoft/wps-office/templates"
+
+    for tdir in tpl_dirs:
+        if not os.path.exists(tdir):
+            continue
+
+        for cfile in chinese_templates:
+            cpath = os.path.join(tdir, cfile)
+            if os.path.exists(cpath):
+                try:
+                    os.remove(cpath)
+                except Exception:
+                    pass
+
+        if os.path.exists(system_tpl_dir):
+            for ru_file in os.listdir(system_tpl_dir):
+                if ru_file.endswith((".wps", ".dps", ".et")) and ru_file not in chinese_templates:
+                    src = os.path.join(system_tpl_dir, ru_file)
+                    dst = os.path.join(tdir, ru_file)
+                    try:
+                        shutil.copy2(src, dst)
+                        if user_name:
+                            os.system(f"chown \x27{user_name}\x27 \x27{dst}\x27 2>/dev/null || true")
+                    except Exception:
+                        pass
+
+# 1. Локализуем системные ярлыки в /opt и /usr
+localize_desktop_dir("/opt/kingsoft/wps-office/desktops")
+localize_desktop_dir("/usr/share/applications")
+
+# 2. Обрабатываем профиль /etc/skel
+setup_templates_and_desktops_for_user("/etc/skel", "")
+
+# 3. Обрабатываем всех пользователей /home/* и root
+for user_dir in os.listdir("/home"):
+    hpath = os.path.join("/home", user_dir)
+    if os.path.isdir(hpath):
+        setup_templates_and_desktops_for_user(hpath, user_dir)
+
+setup_templates_and_desktops_for_user("/root", "root")
+' 2>/dev/null || true
+
+# Применяем конфигурацию Office.conf
+set_user_office_conf "/etc/skel/.config/Kingsoft/Office.conf" ""
 for user_dir in /home/*; do
     if [ -d "$user_dir" ]; then
         u_name=$(basename "$user_dir")
         set_user_office_conf "$user_dir/.config/Kingsoft/Office.conf" "$u_name"
     fi
 done
-
-# Применяем к root
 set_user_office_conf "/root/.config/Kingsoft/Office.conf" "root"
+
+# Обновляем кеш ярлыков
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications 2>/dev/null || true
+fi
 
 exit 0

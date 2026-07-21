@@ -5,6 +5,16 @@ on:
     # Запуск каждый день в 04:00 UTC
     - cron: '0 4 * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - 'version.txt'
+      - 'revision.txt'
+      - 'CHANGELOG.md'
+      - 'dist/**'
+      - 'README.md'
+      - '.gitignore'
 
 permissions:
   contents: write
@@ -15,6 +25,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Set up Python
         uses: actions/setup-python@v5

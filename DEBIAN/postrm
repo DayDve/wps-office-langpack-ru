@@ -14,7 +14,6 @@ case "$1" in
             sed -i '/^common\\DefaultLanguage=1049/d' "$SKEL_CONF" 2>/dev/null || true
             sed -i '/^common\\Local\\UILanguage=1049/d' "$SKEL_CONF" 2>/dev/null || true
 
-            # Если файл остался пустым или содержит только заголовок секции, удаляем его
             CLEAN_VAL=$(tr -d '[:space:]' < "$SKEL_CONF")
             if [ "$CLEAN_VAL" = "[6.0]" ] || [ "$CLEAN_VAL" = "[General]" ] || [ "$CLEAN_VAL" = "[General][6.0]" ] || [ -z "$CLEAN_VAL" ]; then
                 rm -f "$SKEL_CONF"
@@ -22,14 +21,66 @@ case "$1" in
             fi
         fi
 
-        # 3. Принудительное удаление всех каталогов ru_RU и ru-ru в mui и addons
+        # 3. Удаление русских полей в .desktop файлах и удаление русских шаблонов
+        python3 -c '
+import os
+
+def clean_desktop_dir(desktop_dir):
+    if not os.path.exists(desktop_dir):
+        return
+    for fname in os.listdir(desktop_dir):
+        if fname.startswith("wps-office-") and fname.endswith(".desktop"):
+            fpath = os.path.join(desktop_dir, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = f.readlines()
+                new_lines = [l for l in lines if not any(l.startswith(k) for k in ["Name[ru_RU]=", "GenericName[ru_RU]=", "Comment[ru_RU]="])]
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+            except Exception:
+                pass
+
+def clean_user_templates(user_home):
+    if not os.path.exists(user_home):
+        return
+    ru_templates = ["Документ WPS.wps", "Презентация WPS.dps", "Таблица WPS.et"]
+    tpl_dirs = [os.path.join(user_home, "Templates"), os.path.join(user_home, "Шаблоны")]
+    for tdir in tpl_dirs:
+        if os.path.exists(tdir):
+            for rfile in ru_templates:
+                rpath = os.path.join(tdir, rfile)
+                if os.path.exists(rpath):
+                    try:
+                        os.remove(rpath)
+                    except Exception:
+                        pass
+
+# Очищаем ярлыки
+clean_desktop_dir("/opt/kingsoft/wps-office/desktops")
+clean_desktop_dir("/usr/share/applications")
+
+# Очищаем системные и пользовательские шаблоны
+clean_user_templates("/opt/kingsoft/wps-office")
+clean_user_templates("/etc/skel")
+
+if os.path.exists("/home"):
+    for udir in os.listdir("/home"):
+        clean_user_templates(os.path.join("/home", udir))
+
+clean_user_templates("/root")
+' 2>/dev/null || true
+
+        # 4. Принудительное удаление всех каталогов ru_RU и ru-ru в mui и addons
         rm -rf /opt/kingsoft/wps-office/office6/mui/ru_RU 2>/dev/null || true
 
         if [ -d "/opt/kingsoft/wps-office/office6/addons" ]; then
             find /opt/kingsoft/wps-office/office6/addons -name "ru_RU" -exec rm -rf {} + 2>/dev/null || true
             find /opt/kingsoft/wps-office/office6/addons -name "ru-ru" -exec rm -rf {} + 2>/dev/null || true
-            # Очистка всех пустых родительских каталогов снизу вверх (-depth)
             find /opt/kingsoft/wps-office/office6/addons -depth -type d -empty -delete 2>/dev/null || true
+        fi
+
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications 2>/dev/null || true
         fi
         ;;
     upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
