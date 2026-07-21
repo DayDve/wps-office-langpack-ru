@@ -1,0 +1,15 @@
+# Сборка и DEB-пакеты
+dist/
+*.deb
+
+# Кэш Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Временные файлы и бэкапы
+*.swp
+*.swo
+*~
+.tmp/
+tmp/
