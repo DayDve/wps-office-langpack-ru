@@ -110,6 +110,13 @@ def localize_desktop_dir(desktop_dir):
         if sec_idx == -1:
             continue
 
+        # Гарантируем наличие главной категории Office; в полях Categories
+        for i, line in enumerate(lines):
+            if line.startswith("Categories="):
+                cats = line.split("=", 1)[1].strip()
+                if "Office;" not in cats and "Office" not in cats:
+                    lines[i] = f"Categories=Office;{cats}\n"
+
         for k, v in keys.items():
             target_line = f"{k}={v}\n"
             found = False
