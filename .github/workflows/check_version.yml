@@ -2,7 +2,7 @@ name: Check for New WPS Office Language Pack
 
 on:
   schedule:
-    # Запуск каждый день в 04:00 UTC
+    # Запуск каждый понедельник в 04:00 UTC
     - cron: '0 4 * * 1'
   workflow_dispatch:
   push:
