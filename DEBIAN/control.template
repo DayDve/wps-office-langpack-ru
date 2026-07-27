@@ -3,6 +3,7 @@ Version: __VERSION__
 Architecture: all
 Maintainer: DayDve <daydve@smbit.pro>
 Depends: wps-office (>= 12)
+Recommends: ttf-mscorefonts-installer
 Replaces: wps-office
 Section: localization
 Priority: optional

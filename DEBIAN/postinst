@@ -67,18 +67,18 @@ def localize_desktop_dir(desktop_dir):
 
     translations = {
         "wps-office-wps.desktop": {
-            "Name[ru_RU]": "WPS Текст",
-            "GenericName[ru_RU]": "WPS Текст",
+            "Name[ru_RU]": "WPS Writer",
+            "GenericName[ru_RU]": "WPS Writer",
             "Comment[ru_RU]": "Редактирование текстов и документов WPS Writer"
         },
         "wps-office-et.desktop": {
-            "Name[ru_RU]": "WPS Таблицы",
-            "GenericName[ru_RU]": "WPS Таблицы",
+            "Name[ru_RU]": "WPS Spreadsheets",
+            "GenericName[ru_RU]": "WPS Spreadsheets",
             "Comment[ru_RU]": "Анализ и управление данными WPS Spreadsheets"
         },
         "wps-office-wpp.desktop": {
-            "Name[ru_RU]": "WPS Презентации",
-            "GenericName[ru_RU]": "WPS Презентации",
+            "Name[ru_RU]": "WPS Presentation",
+            "GenericName[ru_RU]": "WPS Presentation",
             "Comment[ru_RU]": "Создание и показ презентаций WPS Presentation"
         },
         "wps-office-pdf.desktop": {
