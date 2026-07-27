@@ -20,7 +20,6 @@ CHANGELOG_FILE = os.path.join(REPO_ROOT, "CHANGELOG.md")
 BASE_URL = "https://global-static.wpscdn.com/office/commons/static/kplugin/global/plugin/wps_intl/addons/pool/win-x64/klangruru_3.1.0.{}.7z"
 
 APP_GROUPS = {
-    "kaiwpp": "WPS Presentation (ИИ-ассистент)",
     "wpp": "WPS Presentation (редактор презентаций)",
     "pdf": "WPS PDF (инструменты работы с PDF)",
     "wps": "WPS Writer (текстовый редактор)",
@@ -39,23 +38,49 @@ def check_ver(ver):
     except Exception:
         return False
 
-def extract_strings(filepath):
-    strings = set()
+def extract_qm_strings(filepath):
     try:
         with open(filepath, "rb") as f:
             data = f.read()
-        utf8_str = re.findall(rb"[\x20-\x7e\xd0-\xd1][\x80-\xbf\x20-\x7e]{3,}", data)
-        for s in utf8_str:
-            try:
-                decoded = s.decode("utf-8").strip()
-                decoded = re.sub(r'^[^\w]+', '', decoded)
-                if len(decoded) > 3 and not decoded.startswith("http"):
-                    strings.add(decoded)
-            except:
-                pass
-    except:
+    except Exception:
+        return set()
+
+    best_strings = set()
+    best_count = 0
+
+    # Пробуем декодировать как UTF-16BE со смещением 0 и 1
+    for offset in [0, 1]:
+        try:
+            text = data[offset:].decode("utf-16be", errors="ignore")
+            words = re.findall(r"[а-яА-ЯёЁ\s]{3,}", text)
+            cleaned = set()
+            for w in words:
+                w = w.strip()
+                w = re.sub(r"^[^\w\s]+|[^\w\s]+$", "", w).strip()
+                if len(w) > 3:
+                    cleaned.add(w)
+            if len(cleaned) > best_count:
+                best_count = len(cleaned)
+                best_strings = cleaned
+        except Exception:
+            pass
+
+    # Резервный вариант: пробуем UTF-8
+    try:
+        text_utf8 = data.decode("utf-8", errors="ignore")
+        words_utf8 = re.findall(r"[а-яА-ЯёЁ\s]{3,}", text_utf8)
+        cleaned_utf8 = set()
+        for w in words_utf8:
+            w = w.strip()
+            w = re.sub(r"^[^\w\s]+|[^\w\s]+$", "", w).strip()
+            if len(w) > 3:
+                cleaned_utf8.add(w)
+        if len(cleaned_utf8) > best_count:
+            best_strings = cleaned_utf8
+    except Exception:
         pass
-    return strings
+
+    return best_strings
 
 def set_github_output(name, value):
     gh_out = os.environ.get("GITHUB_OUTPUT")
@@ -78,7 +103,13 @@ def main():
 
     print(f"Current version in version.txt: {current_build}, revision: {current_rev}")
 
-    target_build_arg = sys.argv[1] if len(sys.argv) > 1 else None
+    dry_run = False
+    target_build_arg = None
+    for arg in sys.argv[1:]:
+        if arg == "--dry-run":
+            dry_run = True
+        else:
+            target_build_arg = arg
 
     if target_build_arg:
         latest_build = str(target_build_arg)
@@ -113,16 +144,25 @@ def main():
     # Проверяем, менялись ли любые файлы пакета в Git (кроме служебных мета-файлов)
     IGNORE_META = {"version.txt", "revision.txt", "CHANGELOG.md"}
     pkg_files_changed = False
+    modified_pkg_files = []
     try:
         res = subprocess.run(["git", "diff", "HEAD~1", "HEAD", "--name-only"], capture_output=True, text=True)
         mod_files = res.stdout.splitlines()
         for mf in mod_files:
             if mf not in IGNORE_META and not mf.startswith("dist/"):
                 pkg_files_changed = True
+                modified_pkg_files.append(mf)
                 print(f"Detected modification in package file: {mf}")
-                break
     except Exception as e:
         sys.stderr.write(f"Git diff check error: {e}\n")
+
+    git_diff_text = ""
+    if modified_pkg_files:
+        try:
+            diff_res = subprocess.run(["git", "diff", "HEAD~1", "HEAD", "--"] + modified_pkg_files, capture_output=True, text=True)
+            git_diff_text = diff_res.stdout
+        except Exception as e:
+            sys.stderr.write(f"Git diff content fetch error: {e}\n")
 
     if latest_build == current_build and not pkg_files_changed:
         print(f"No changes found. Current version {current_build}-{current_rev} is latest.")
@@ -158,7 +198,7 @@ def main():
         os.makedirs(old_extracted, exist_ok=True)
         os.makedirs(new_extracted, exist_ok=True)
 
-        if os.path.exists(old_archive):
+        if os.path.exists(old_archive) and os.path.getsize(old_archive) > 0:
             subprocess.run(["7z", "x", old_archive, f"-o{old_extracted}", "-y"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["7z", "x", new_archive, f"-o{new_extracted}", "-y"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -190,21 +230,43 @@ def main():
         common = sorted(list(new_files & old_files))
 
         changed_apps = set()
+        changed_apps_info = []
         for f in common:
-            if os.path.getsize(os.path.join(old_extracted, f)) != os.path.getsize(os.path.join(new_extracted, f)):
+            old_f_path = os.path.join(old_extracted, f)
+            new_f_path = os.path.join(new_extracted, f)
+            if os.path.getsize(old_f_path) != os.path.getsize(new_f_path):
                 base_mod = os.path.basename(f).replace(".qm", "").lower()
                 if base_mod in APP_GROUPS:
-                    changed_apps.add(APP_GROUPS[base_mod])
+                    app_name = APP_GROUPS[base_mod]
+                    changed_apps.add(app_name)
+                    
+                    old_strs = extract_qm_strings(old_f_path)
+                    new_strs = extract_qm_strings(new_f_path)
+                    added_strs = sorted(list(new_strs - old_strs))
+                    
+                    if added_strs:
+                        sample = added_strs[:15]
+                        if len(added_strs) > 15:
+                            sample_str = ", ".join(sample) + f" и ещё {len(added_strs) - 15} переведенных фраз"
+                        else:
+                            sample_str = ", ".join(sample)
+                        changed_apps_info.append(f"- **{app_name}**: Добавлены/изменены переводы для: {sample_str}")
+                    else:
+                        changed_apps_info.append(f"- **{app_name}**: Обновлен перевод интерфейса")
 
         human_changed_list = sorted(list(changed_apps))
 
         raw_summary_parts = []
-        if human_changed_list:
+        if changed_apps_info:
+            raw_summary_parts.append("Обновлен перевод в приложениях:\n" + "\n".join(changed_apps_info))
+        elif human_changed_list:
             raw_summary_parts.append(f"Обновлен перевод в приложениях: {', '.join(human_changed_list)}")
-        if len(added) > 0:
-            raw_summary_parts.append(f"Добавлено {len(added)} новых файлов графических шаблонов/диаграмм")
+        
+        templates_added = [f for f in added if f.endswith((".wps", ".et", ".dps", ".docx", ".xlsx", ".pptx", ".rcc"))]
+        if len(templates_added) > 0:
+            raw_summary_parts.append(f"Добавлено {len(templates_added)} новых файлов графических шаблонов/диаграмм")
 
-        raw_diff_text = ". ".join(raw_summary_parts)
+        raw_diff_text = "\n".join(raw_summary_parts)
 
         is_new_upstream = (latest_build != current_build)
         is_revision_bump = (latest_build == current_build and pkg_files_changed)
@@ -219,28 +281,38 @@ def main():
             if is_revision_bump:
                 prompt = f"""Ты — технический редактор языкового пакета Linux wps-office-langpack-ru. Сформируй краткий и полезный Changelog на русском языке для релиза версии {deb_version}.
 
-В этом релизе обновлена **ревизия системного пакета** (автоматика интеграции, шрифты, настройки профиля), а билд самого перевода остается {latest_build}.
+В этом релизе обновлены **настройки интеграции и установки пакета** (автоматика установки, шрифты, настройки профиля), а сам перевод остается версии {latest_build}.
 
 ТРЕБОВАНИЯ:
-- Пиши только полезные факты ДЛЯ КОНЕЧНОГО ПОЛЬЗОВАТЕЛЯ (например, улучшена автоматическая пропись русского языка при установке, оптимизированы правила подстановки системных шрифтов, улучшена деинсталляция).
+- Пиши только полезные факты ДЛЯ КОНЕЧНОГО ПОЛЬЗОВАТЕЛЯ.
+- НЕ ВЫДУМЫВАЙ никакие улучшения и изменения, которых нет в ДАННЫХ ИЗМЕНЕНИЙ (GIT DIFF) ниже. Если в DIFF изменены только пути, названия файлов или пара строк, опиши строго только это.
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать про ИИ-помощника, ИИ-функции (AI assistant, Copilot, ИИ-ассистент), так как эти функции актуальны только для Windows-версии, а пакет собирается для Linux.
 - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать технические слова разработчиков ("build.sh", "postinst", "git diff", "dpkg", "скрипт сборки"). Пользователю они не нужны.
 - НЕ ПИШИ воду и хвалебные слова.
 - Длина: 2-3 коротких и понятных пункта.
+
+ДАННЫЕ ИЗМЕНЕНИЙ (GIT DIFF):
+{git_diff_text}
 
 Формат каждого пункта: * **Компонент**: Сухое и понятное описание пользы.
 Выведи ТОЛЬКО маркированный список изменений в формате Markdown."""
             elif is_new_upstream and pkg_files_changed:
                 prompt = f"""Ты — технический редактор языкового пакета Linux wps-office-langpack-ru. Сформируй краткий и полезный Changelog на русском языке для релиза версии {deb_version} (новый билд перевода {latest_build}, был {current_build}).
 
-В этом релизе вышли НОВЫЙ перевод от разработчиков Kingsoft и обновления системного пакета!
+В этом релизе вышли НОВЫЙ перевод от разработчиков Kingsoft и обновления в скриптах установки/настройки пакета!
 
 ТРЕБОВАНИЯ:
-- Опиши кратко обновления перевода интерфейса/шаблонов и полезные улучшения системного пакета для пользователя (автоматическая пропись русского языка, подстановка шрифтов, деинсталляция).
-- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать технические слова разработчиков ("build.sh", "postinst", "git diff", "dpkg", "скрипт сборки"). Пользователю они не нужны.
+- Опиши кратко обновления перевода интерфейса/шаблонов и полезные улучшения в установке/настройке пакета для пользователя.
+- НЕ ВЫДУМЫВАЙ изменения в установке/настройке пакета, которых нет в ДАННЫХ ИЗМЕНЕНИЙ (GIT DIFF) ниже.
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать про ИИ-помощника, ИИ-функции (AI assistant, Copilot, ИИ-ассистент), так как эти функции актуальны только для Windows-версии, а пакет собирается для Linux.
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать технические слова разработчиков ("build.sh", "postinst", "git diff", "dpkg", "скрипт сборки").
 - НЕ ПИШИ воду и хвалебные слова.
 
 ДАННЫЕ ПО ПЕРЕВОДУ:
 {raw_diff_text}
+
+ДАННЫЕ ИЗМЕНЕНИЙ СИСТЕМНОГО ПАКЕТА (GIT DIFF):
+{git_diff_text}
 
 Формат каждого пункта: * **Компонент**: Сухое и понятное описание.
 Выведи ТОЛЬКО маркированный список изменений в формате Markdown."""
@@ -249,13 +321,12 @@ def main():
 
 ВАЖНОЕ ПРАВИЛО: ЭТО ЯЗЫКОВОЙ ПАКЕТ (LANGPACK). Здесь НЕТ программного или исполняемого кода C++! Пиши ТОЛЬКО про **перевод интерфейса, подсказки меню и локализованные шаблоны**.
 
-КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО:
-- Писать "обновлен программный код", "библиотеки", "исполняемый модуль".
-- Писать воду и хвалебные слова ("комфортный", "интуитивный", "всестороннее").
-
 ТРЕБОВАНИЯ:
 - Пиши только короткие факты про обновление перевода и шаблонов (3-4 пункта).
-- Формат каждого пункта: * **Приложение/Компонент**: Сухое описание обновления перевода.
+- НЕ ВЫДУМЫВАЙ никакие детали о том, что именно поменялось внутри перевода (например, "исправлен перевод меню рецензирования"), если этих деталей нет в ДАННЫХ. Ограничься общими фразами: "Обновлен перевод элементов интерфейса и меню для WPS Writer" и т.д.
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать про ИИ-помощника, ИИ-функции (AI assistant, Copilot, ИИ-ассистент), так как эти функции актуальны только для Windows-версии, а пакет собирается для Linux.
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать "обновлен программный код", "библиотеки", "исполняемый модуль".
+- НЕ ПИШИ воду и хвалебные слова.
 
 ДАННЫЕ:
 {raw_diff_text}
@@ -319,19 +390,31 @@ def main():
         else:
             full_changelog = header + new_block + "\n"
 
-        with open(CHANGELOG_FILE, "w", encoding="utf-8") as f:
-            f.write(full_changelog)
+        if dry_run:
+            print("=== DRY RUN (NO FILES MODIFIED) ===")
+            print(f"Proposed debian version: {deb_version}")
+            print(f"Proposed build date: {build_date}")
+            print("\n--- RAW INPUT DATA PASSED TO GEMINI ---")
+            print(f"RAW DIFF TEXT (QM changes):\n{raw_diff_text}")
+            print(f"GIT DIFF TEXT (Packaging changes):\n{git_diff_text}")
+            print("---------------------------------------\n")
+            print("Generated Changelog entry:")
+            print(new_block)
+            print("===================================")
+        else:
+            with open(CHANGELOG_FILE, "w", encoding="utf-8") as f:
+                f.write(full_changelog)
 
-        with open(VERSION_FILE, "w", encoding="utf-8") as f:
-            f.write(f"{latest_build}\n")
+            with open(VERSION_FILE, "w", encoding="utf-8") as f:
+                f.write(f"{latest_build}\n")
 
-        with open(REVISION_FILE, "w", encoding="utf-8") as f:
-            f.write(f"{next_rev}\n")
+            with open(REVISION_FILE, "w", encoding="utf-8") as f:
+                f.write(f"{next_rev}\n")
 
-        print(f"Version bumped to {latest_build}, CHANGELOG.md updated.")
-        set_github_output("updated", "true")
-        set_github_output("version", deb_version)
-        set_github_output("build_num", latest_build)
+            print(f"Version bumped to {latest_build}, CHANGELOG.md updated.")
+            set_github_output("updated", "true")
+            set_github_output("version", deb_version)
+            set_github_output("build_num", latest_build)
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
