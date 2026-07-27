@@ -42,6 +42,9 @@ if "6.0" not in config:
 config["6.0"]["languages"] = "ru_RU"
 config["6.0"][r"common\DefaultLanguage"] = "1049"
 config["6.0"][r"common\Local\UILanguage"] = "1049"
+config["6.0"][r"pdf\Application%20Settings\AnnotationTypeWriterDefaultFont"] = "Arial"
+config["6.0"][r"pdf\Application%20Settings\AnnotationInstructDefaultFont"] = "Arial"
+config["6.0"][r"pdf\Application%20Settings\AnnotationFreeTextBoxDefaultFont"] = "Arial"
 
 with open(conf_file, "w", encoding="utf-8") as f:
     config.write(f, space_around_delimiters=False)
