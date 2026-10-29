@@ -17,8 +17,7 @@ REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
 VERSION_FILE = os.path.join(REPO_ROOT, "version.txt")
 REVISION_FILE = os.path.join(REPO_ROOT, "revision.txt")
 CHANGELOG_FILE = os.path.join(REPO_ROOT, "CHANGELOG.md")
-LINUX_MODULES_FILE = os.path.join(REPO_ROOT, "linux-modules.txt")
-WPS_DIR = "/opt/kingsoft/wps-office/office6"
+LINUX_MODULES_FILE = os.environ.get("LINUX_MODULES_FILE", os.path.join(tempfile.gettempdir(), "linux-modules.txt"))
 
 BASE_URL = "https://global-static.wpscdn.com/office/commons/static/kplugin/global/plugin/wps_intl/addons/pool/win-x64/klangruru_3.1.0.{}.7z"
 SCAN_WINDOW = 50
@@ -55,14 +54,24 @@ def module_key(path):
         return f"mui/{parts[1]}"
     return None
 
-def update_linux_modules():
-    addons_dir = os.path.join(WPS_DIR, "addons")
-    mui_dir = os.path.join(WPS_DIR, "mui", "zh_CN")
-    keys = [f"addons/{d}" for d in sorted(os.listdir(addons_dir)) if os.path.isdir(os.path.join(addons_dir, d))]
-    keys += [f"mui/{f}" for f in sorted(os.listdir(mui_dir)) if f.endswith(".qm")]
+def modules_from_deb(deb_path):
+    # Список модулей Linux-версии WPS по содержимому её .deb-пакета
+    res = subprocess.run(f"dpkg-deb --fsys-tarfile '{deb_path}' | tar -t", shell=True,
+                         capture_output=True, text=True, check=True)
+    keys = set()
+    for path in res.stdout.splitlines():
+        m = re.match(r"^\./opt/kingsoft/wps-office/office6/addons/([^/]+)/.", path)
+        if m:
+            keys.add(f"addons/{m.group(1)}")
+        m = re.match(r"^\./opt/kingsoft/wps-office/office6/mui/zh_CN/([^/]+\.qm)$", path)
+        if m:
+            keys.add(f"mui/{m.group(1)}")
+    if not keys:
+        print(f"Error: no WPS modules found in {deb_path}.")
+        sys.exit(1)
     with open(LINUX_MODULES_FILE, "w", encoding="utf-8") as f:
-        f.write("\n".join(keys) + "\n")
-    print(f"Saved {len(keys)} modules from {WPS_DIR} to {LINUX_MODULES_FILE}")
+        f.write("\n".join(sorted(keys)) + "\n")
+    print(f"Saved {len(keys)} modules from {deb_path} to {LINUX_MODULES_FILE}")
 
 def load_linux_modules():
     if not os.path.exists(LINUX_MODULES_FILE):
@@ -150,12 +159,13 @@ def main():
 
     dry_run = False
     target_build_arg = None
-    for arg in sys.argv[1:]:
+    args = sys.argv[1:]
+    if args[:1] == ["--modules-from-deb"] and len(args) == 2:
+        modules_from_deb(args[1])
+        sys.exit(0)
+    for arg in args:
         if arg == "--dry-run":
             dry_run = True
-        elif arg == "--update-modules":
-            update_linux_modules()
-            sys.exit(0)
         else:
             target_build_arg = arg
 
@@ -195,14 +205,14 @@ def main():
         latest_build = str(latest_build)
 
     # Проверяем, менялись ли любые файлы пакета в Git (кроме служебных мета-файлов)
-    IGNORE_META = {"version.txt", "revision.txt", "CHANGELOG.md", "linux-modules.txt"}
+    IGNORE_META = {"version.txt", "revision.txt", "CHANGELOG.md"}
     pkg_files_changed = False
     modified_pkg_files = []
     try:
         res = subprocess.run(["git", "diff", "HEAD~1", "HEAD", "--name-only"], capture_output=True, text=True)
         mod_files = res.stdout.splitlines()
         for mf in mod_files:
-            if mf not in IGNORE_META and not mf.startswith("dist/"):
+            if mf not in IGNORE_META and not mf.startswith(("dist/", ".github/")):
                 pkg_files_changed = True
                 modified_pkg_files.append(mf)
                 print(f"Detected modification in package file: {mf}")

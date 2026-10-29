@@ -12,7 +12,6 @@ on:
       - 'version.txt'
       - 'revision.txt'
       - 'CHANGELOG.md'
-      - 'linux-modules.txt'
       - 'dist/**'
       - 'README.md'
       - '.gitignore'
@@ -49,10 +48,43 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y p7zip-full wget
 
+      # Список модулей Linux-версии WPS берём из пакета wps-office в APT-репозитории
+      # и кэшируем по его SHA256, чтобы не качать ~560 МБ на каждом запуске.
+      - name: Locate WPS Office package
+        id: wps_pkg
+        run: |
+          set -euo pipefail
+          curl -fsSL "${WPS_APT_REPO}/dists/noble/main/binary-amd64/Packages" -o Packages
+          awk -v RS= '/(^|\n)Package: wps-office\n/' Packages > wps.stanza
+          echo "filename=$(awk '/^Filename:/{print $2}' wps.stanza)" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(awk '/^SHA256:/{print $2}' wps.stanza)" >> "$GITHUB_OUTPUT"
+          grep -q '^SHA256:' wps.stanza
+        env:
+          WPS_APT_REPO: https://apt-repo.daydve.workers.dev
+
+      - name: Cache WPS module list
+        id: wps_cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/linux-modules.txt
+          key: wps-modules-${{ steps.wps_pkg.outputs.sha256 }}
+
+      - name: Build WPS module list
+        if: steps.wps_cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://apt-repo.daydve.workers.dev/${{ steps.wps_pkg.outputs.filename }}" -o "$RUNNER_TEMP/wps-office.deb"
+          echo "${{ steps.wps_pkg.outputs.sha256 }}  $RUNNER_TEMP/wps-office.deb" | sha256sum -c -
+          python3 .github/scripts/check_version.py --modules-from-deb "$RUNNER_TEMP/wps-office.deb"
+          rm -f "$RUNNER_TEMP/wps-office.deb"
+        env:
+          LINUX_MODULES_FILE: ${{ runner.temp }}/linux-modules.txt
+
       - name: Run version check and changelog generator
         id: check_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LINUX_MODULES_FILE: ${{ runner.temp }}/linux-modules.txt
         run: |
           python3 .github/scripts/check_version.py 2>&1 | tee build_run.log
 
