@@ -323,9 +323,9 @@ def main():
 Выведи ТОЛЬКО маркированный список изменений в формате Markdown."""
 
             endpoints = [
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent"
             ]
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
@@ -339,7 +339,7 @@ def main():
                         "X-goog-api-key": api_key
                     }
                     req_obj = urllib.request.Request(base_url, data=json.dumps(payload).encode("utf-8"), headers=headers)
-                    with urllib.request.urlopen(req_obj, timeout=25) as resp:
+                    with urllib.request.urlopen(req_obj, timeout=60) as resp:
                         data = json.loads(resp.read().decode("utf-8"))
                         new_entry_content = data["candidates"][0]["content"]["parts"][0]["text"].strip()
                         if new_entry_content:
