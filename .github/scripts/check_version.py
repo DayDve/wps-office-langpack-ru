@@ -10,6 +10,7 @@ import tempfile
 import urllib.request
 import subprocess
 import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
@@ -18,6 +19,7 @@ REVISION_FILE = os.path.join(REPO_ROOT, "revision.txt")
 CHANGELOG_FILE = os.path.join(REPO_ROOT, "CHANGELOG.md")
 
 BASE_URL = "https://global-static.wpscdn.com/office/commons/static/kplugin/global/plugin/wps_intl/addons/pool/win-x64/klangruru_3.1.0.{}.7z"
+SCAN_WINDOW = 50
 
 APP_GROUPS = {
     "wpp": "WPS Presentation (редактор презентаций)",
@@ -115,30 +117,17 @@ def main():
         latest_build = str(target_build_arg)
         print(f"Target build specified via CLI argument: {latest_build}")
     else:
-        current_int = int(current_build)
-        latest_build = current_int
-        if check_ver(current_int):
-            step = 1
-            curr = current_int
+        # В нумерации сборок бывают пропуски (например, 3322 нет, а 3330 есть),
+        # поэтому проверяем окнами по SCAN_WINDOW номеров и останавливаемся,
+        # только когда целое окно пустое.
+        latest_build = int(current_build)
+        with ThreadPoolExecutor(max_workers=16) as pool:
             while True:
-                next_v = curr + step
-                if check_ver(next_v):
-                    latest_build = next_v
-                    curr = next_v
-                    step *= 2
-                else:
-                    first_inv = next_v
+                window = list(range(latest_build + 1, latest_build + 1 + SCAN_WINDOW))
+                found = [v for v, ok in zip(window, pool.map(check_ver, window)) if ok]
+                if not found:
                     break
-
-            low = latest_build + 1
-            high = first_inv - 1
-            while low <= high:
-                mid = (low + high) // 2
-                if check_ver(mid):
-                    latest_build = mid
-                    low = mid + 1
-                else:
-                    high = mid - 1
+                latest_build = max(found)
         latest_build = str(latest_build)
 
     # Проверяем, менялись ли любые файлы пакета в Git (кроме служебных мета-файлов)

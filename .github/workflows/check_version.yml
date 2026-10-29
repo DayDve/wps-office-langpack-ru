@@ -18,11 +18,21 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   check-and-update:
     runs-on: ubuntu-latest
     steps:
+      # GitHub отключает schedule через 60 дней без активности в репозитории,
+      # а коммиты от GITHUB_TOKEN активностью не считаются. Повторное включение
+      # через API сбрасывает этот таймер.
+      - name: Keep scheduled workflow alive
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/check_version.yml/enable"
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
