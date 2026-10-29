@@ -12,6 +12,7 @@ on:
       - 'version.txt'
       - 'revision.txt'
       - 'CHANGELOG.md'
+      - 'linux-modules.txt'
       - 'dist/**'
       - 'README.md'
       - '.gitignore'

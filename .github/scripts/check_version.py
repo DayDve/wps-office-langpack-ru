@@ -17,9 +17,13 @@ REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
 VERSION_FILE = os.path.join(REPO_ROOT, "version.txt")
 REVISION_FILE = os.path.join(REPO_ROOT, "revision.txt")
 CHANGELOG_FILE = os.path.join(REPO_ROOT, "CHANGELOG.md")
+LINUX_MODULES_FILE = os.path.join(REPO_ROOT, "linux-modules.txt")
+WPS_DIR = "/opt/kingsoft/wps-office/office6"
 
 BASE_URL = "https://global-static.wpscdn.com/office/commons/static/kplugin/global/plugin/wps_intl/addons/pool/win-x64/klangruru_3.1.0.{}.7z"
 SCAN_WINDOW = 50
+# Сколько последних сборок скачивать для сравнения покрытия модулей
+CANDIDATES = 10
 
 APP_GROUPS = {
     "wpp": "WPS Presentation (редактор презентаций)",
@@ -39,6 +43,45 @@ def check_ver(ver):
             return resp.status == 200
     except Exception:
         return False
+
+def module_key(path):
+    # addons/<модуль>/mui/ru_RU/*.qm -> addons/<модуль>, ru_RU/<файл>.qm -> mui/<файл>.qm
+    parts = path.replace("\\", "/").split("/")
+    if not parts[-1].endswith(".qm"):
+        return None
+    if parts[0] == "addons" and len(parts) > 2:
+        return f"addons/{parts[1]}"
+    if parts[0] == "ru_RU" and len(parts) == 2:
+        return f"mui/{parts[1]}"
+    return None
+
+def update_linux_modules():
+    addons_dir = os.path.join(WPS_DIR, "addons")
+    mui_dir = os.path.join(WPS_DIR, "mui", "zh_CN")
+    keys = [f"addons/{d}" for d in sorted(os.listdir(addons_dir)) if os.path.isdir(os.path.join(addons_dir, d))]
+    keys += [f"mui/{f}" for f in sorted(os.listdir(mui_dir)) if f.endswith(".qm")]
+    with open(LINUX_MODULES_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(keys) + "\n")
+    print(f"Saved {len(keys)} modules from {WPS_DIR} to {LINUX_MODULES_FILE}")
+
+def load_linux_modules():
+    if not os.path.exists(LINUX_MODULES_FILE):
+        return None
+    with open(LINUX_MODULES_FILE, "r", encoding="utf-8") as f:
+        return {line.strip() for line in f if line.strip()}
+
+def archive_coverage(ver, linux_modules):
+    # Сколько модулей Linux-версии WPS переводит данная сборка (-1 при ошибке)
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = os.path.join(tmp, "pack.7z")
+        try:
+            urllib.request.urlretrieve(BASE_URL.format(ver), archive)
+            res = subprocess.run(["7z", "l", "-slt", archive], capture_output=True, text=True, check=True)
+        except Exception as e:
+            sys.stderr.write(f"Coverage check error for build {ver}: {e}\n")
+            return -1
+    keys = {module_key(line[7:]) for line in res.stdout.splitlines() if line.startswith("Path = ")}
+    return len(keys & linux_modules)
 
 def extract_qm_strings(filepath):
     try:
@@ -110,6 +153,9 @@ def main():
     for arg in sys.argv[1:]:
         if arg == "--dry-run":
             dry_run = True
+        elif arg == "--update-modules":
+            update_linux_modules()
+            sys.exit(0)
         else:
             target_build_arg = arg
 
@@ -121,17 +167,35 @@ def main():
         # поэтому проверяем окнами по SCAN_WINDOW номеров и останавливаемся,
         # только когда целое окно пустое.
         latest_build = int(current_build)
+        all_found = []
         with ThreadPoolExecutor(max_workers=16) as pool:
             while True:
                 window = list(range(latest_build + 1, latest_build + 1 + SCAN_WINDOW))
                 found = [v for v, ok in zip(window, pool.map(check_ver, window)) if ok]
                 if not found:
                     break
+                all_found += found
                 latest_build = max(found)
+
+        # В один пул параллельно выкладываются сборки из нескольких веток с разным
+        # набором модулей, поэтому максимальный номер — случайная ветка. Берём
+        # сборку, которая переводит больше всего модулей Linux-версии WPS, а при
+        # равенстве — самую новую. Текущая сборка участвует в сравнении, чтобы
+        # не откатиться на более бедную ветку.
+        linux_modules = load_linux_modules()
+        if all_found and linux_modules:
+            candidates = all_found[-CANDIDATES:] + [int(current_build)]
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                scores = dict(zip(candidates, pool.map(lambda v: archive_coverage(v, linux_modules), candidates)))
+            for v in sorted(scores):
+                print(f"Build {v}: covers {scores[v]} of {len(linux_modules)} Linux modules")
+            latest_build = max(scores, key=lambda v: (scores[v], v))
+        elif all_found:
+            print(f"Warning: {LINUX_MODULES_FILE} not found, taking the highest build number.")
         latest_build = str(latest_build)
 
     # Проверяем, менялись ли любые файлы пакета в Git (кроме служебных мета-файлов)
-    IGNORE_META = {"version.txt", "revision.txt", "CHANGELOG.md"}
+    IGNORE_META = {"version.txt", "revision.txt", "CHANGELOG.md", "linux-modules.txt"}
     pkg_files_changed = False
     modified_pkg_files = []
     try:
